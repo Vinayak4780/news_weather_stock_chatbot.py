@@ -7,6 +7,7 @@ import urllib.parse
 from datetime import datetime
 import pytz
 import nltk
+import yfinance as yf
 from string import punctuation
 from nltk.corpus import stopwords
 # Download necessary resource
@@ -62,62 +63,73 @@ def get_weather(city):
     except requests.exceptions.RequestException as e:
         return f"❌ Network error: {e}"
 
-# Get Stock Price
-def get_stock_symbol(company_name):
-    url = f"https://www.nseindia.com/api/search/autocomplete?q={company_name}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    
+import pandas as pd
+import yfinance as yf
+import pandas as pd
+import yfinance as yf
+import streamlit as st
+# Load NSE Stock List
+def get_nse_stock_list():
     try:
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers)  # Establish session
-        response = session.get(url, headers=headers, timeout=5)
+        url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"  # NSE Official Data
+        df = pd.read_csv(url)
+        df["SYMBOL"] = df["SYMBOL"].astype(str) + ".NS"  # Convert to Yahoo Finance format
+        return set(df["SYMBOL"].tolist())  # Return a set of NSE tickers
+    except Exception as e:
+        return f"❌ Error fetching NSE stock list: {e}"
 
-        if response.status_code == 200:
-            data = response.json()
-            if "symbols" in data and len(data["symbols"]) > 0:
-                return data["symbols"][0]["symbol"]  # Return first matched symbol
-            else:
-                return None
+# Load BSE Stock List
+def get_bse_stock_list():
+    try:
+        url = "https://www.bseindia.com/download/BhavCopy/Equity/EQ20240322_CSV.ZIP"  # Example ZIP URL
+        df = pd.read_csv(url)
+        df["SC_CODE"] = df["SC_CODE"].astype(str) + ".BO"  # Convert to Yahoo Finance format
+        return set(df["SC_CODE"].tolist())  # Return a set of BSE tickers
+    except Exception as e:
+        return f"❌ Error fetching BSE stock list: {e}"
+
+# Store all tickers
+ALL_NSE_TICKERS = get_nse_stock_list()
+ALL_BSE_TICKERS = get_bse_stock_list()
+def get_nse_bse_stock_price(company_name):
+    """
+    Fetches stock price for NSE/BSE-listed Indian companies.
+    """
+    try:
+        company_name = company_name.upper().strip()
+
+        # Check if stock is listed in NSE/BSE
+        if f"{company_name}.NS" in ALL_NSE_TICKERS:
+            ticker = f"{company_name}.NS"
+        elif f"{company_name}.BO" in ALL_BSE_TICKERS:
+            ticker = f"{company_name}.BO"
         else:
-            return None
-    except Exception:
-        return None
+            return f"❌ Error: '{company_name}' not found in NSE or BSE."
 
-# ✅ Function to get stock price (Handles both symbols & names)
-def get_nse_stock_price(query):
-    stock_symbol = query.upper()  # Assume query is stock symbol initially
+        # Fetch stock price
+        stock = yf.Ticker(ticker)
+        data = stock.history(period="2d")  # Fetch last 2 days
 
-    # If input is a company name, fetch its symbol
-    if not re.match(r"^[A-Z]{2,6}$", stock_symbol):  
-        stock_symbol = get_stock_symbol(query)
-        if not stock_symbol:
-            return f"❌ Could not find stock symbol for '{query}'. Try using the stock symbol."
+        if len(data) < 2:
+            return f"❌ Error: No valid stock data found for '{company_name}'."
 
-    try:
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers={"User-Agent": "Mozilla/5.0"})
-        nse_url = f"https://www.nseindia.com/api/quote-equity?symbol={stock_symbol}"
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nseindia.com"}
-        response = session.get(nse_url, headers=headers, timeout=5)
+        # Get today's price (latest close)
+        current_price = data["Close"].iloc[-1]
+        # Get yesterday's closing price
+        yesterday_price = data["Close"].iloc[-2]
 
-        if response.status_code != 200:
-            return f"❌ Error: Could not retrieve stock data for '{stock_symbol}'."
-
-        data = response.json()
-        if "priceInfo" not in data:
-            return f"❌ Stock price not found for '{stock_symbol}'."
-
-        stock_price = data["priceInfo"]["lastPrice"]
-        prev_close = data["priceInfo"]["previousClose"]
-        price_change = stock_price - prev_close
-        percent_change = (price_change / prev_close) * 100
+        # Calculate price change
+        price_change = current_price - yesterday_price
+        percent_change = (price_change / yesterday_price) * 100
         change_sign = "↑" if price_change > 0 else "↓" if price_change < 0 else "→"
 
-        return (f"📈 {stock_symbol} Stock Price: ₹{stock_price}\n"
-                f"📉 1-Day Change: {change_sign} ₹{abs(price_change):.2f} ({change_sign} {abs(percent_change):.2f}%)")
+        return (f"📈 {company_name} Stock Price ({ticker}): ₹{current_price:.2f}\n"
+                f"📉 Change: {change_sign} ₹{abs(price_change):.2f} ({change_sign} {abs(percent_change):.2f}%)\n"
+                f"📊 Yesterday's Close: ₹{yesterday_price:.2f}")
 
-    except requests.exceptions.RequestException as e:
-        return f"❌ Network error: {e}"
+    except Exception as e:
+        return f"❌ Error fetching NSE/BSE stock data: {e}"
+
 
 # Streamlit UI
 st.title("🤖 AI Chatbot")
@@ -133,7 +145,7 @@ with col1:
 
     # ✅ Fetch stock price when user presses "Enter"
     if stock_name:
-        st.write(get_nse_stock_price(stock_name))  
+        st.write(get_nse_bse_stock_price(stock_name))  
 
 with col2:
     st.subheader("☀️ Weather")
